@@ -66,12 +66,7 @@ header .subtitle { font-size: 0.78rem; opacity: 0.7; margin-top: 3px; }
 .info-value.muted { color: #bbb; font-weight: 400; font-size: 0.85rem; }
 .info-divider { width: 1px; height: 28px; background: #e8eef4; }
 
-.base-date-input {
-  border: 1px solid #BDD7EE; border-radius: 7px; padding: 5px 10px;
-  font-size: 0.87rem; color: #1F4E79; font-weight: 600;
-  outline: none; cursor: pointer;
-}
-.base-date-input:focus { border-color: #2E75B6; }
+
 
 /* ── Controls Bar ── */
 .controls-bar {
@@ -170,7 +165,7 @@ tr:hover td { background: #EBF3FB; }
   <div class="info-bar">
     <div class="info-item">
       <span class="info-label">기준일자</span>
-      <input type="date" class="base-date-input" id="base-date" onchange="onBaseDateChange()">
+      <span class="info-value" id="base-date-display" style="color:#bbb;font-weight:400;font-size:0.85rem">파일에서 불러옵니다</span>
     </div>
     <div class="info-divider"></div>
     <div class="info-item">
@@ -269,22 +264,28 @@ let selectedCcys = new Set(['ALL']);
 let allCcys = [];
 let mainChart = null;
 
-// ── Init base date to today ────────────────────────────────────────────────────
-(function() {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = String(today.getMonth()+1).padStart(2,'0');
-  const d = String(today.getDate()).padStart(2,'0');
-  document.getElementById('base-date').value = `${y}-${m}-${d}`;
-})();
+// ── Base Date (per account, from file) ────────────────────────────────────────
+let baseDates = { '일반': null, '특별': null };
 
 function getBaseDate() {
-  const v = document.getElementById('base-date').value;
-  if (!v) return new Date();
-  const d = new Date(v); d.setHours(0,0,0,0); return d;
+  return baseDates[currentAcc] || new Date();
 }
 
-function onBaseDateChange() { render(); }
+function updateBaseDateDisplay() {
+  const d = baseDates[currentAcc];
+  const el = document.getElementById('base-date-display');
+  if (d) {
+    el.textContent = d.toLocaleDateString('ko-KR', { year:'numeric', month:'long', day:'numeric' });
+    el.style.color = '#1F4E79';
+    el.style.fontWeight = '700';
+    el.style.fontSize = '0.92rem';
+  } else {
+    el.textContent = '파일에서 불러옵니다';
+    el.style.color = '#bbb';
+    el.style.fontWeight = '400';
+    el.style.fontSize = '0.85rem';
+  }
+}
 
 // ── Account ────────────────────────────────────────────────────────────────────
 function switchAccount(el) {
@@ -295,6 +296,7 @@ function switchAccount(el) {
   document.getElementById('upload-일반').style.display = currentAcc === '일반' ? '' : 'none';
   document.getElementById('upload-특별').style.display = currentAcc === '특별' ? '' : 'none';
   selectedCcys = new Set(['ALL']);
+  updateBaseDateDisplay();
   rebuildCcyPills();
   render();
 }
@@ -315,7 +317,7 @@ function handleFile(file, acc) {
     // Use first sheet regardless of name
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, { raw:false, defval:'' });
-    store[acc] = parseRows(rows);
+    store[acc] = parseRows(rows, acc);
 
     // Update badge
     const badge = document.getElementById('badge-'+acc);
@@ -351,8 +353,18 @@ function clearFile(acc) {
   if (acc === currentAcc) { selectedCcys = new Set(['ALL']); rebuildCcyPills(); render(); }
 }
 
-function parseRows(rows) {
-  const baseDate = getBaseDate();
+function parseRows(rows, acc) {
+  // Extract base date from '기준일자' column (first non-empty value found)
+  let baseDate = null;
+  for (const r of rows) {
+    const raw = r['기준일자'] || r['기준 일자'] || '';
+    if (!raw) continue;
+    let d = raw instanceof Date ? new Date(raw) : new Date(String(raw).replace(/\./g, '-'));
+    if (!isNaN(d)) { d.setHours(0,0,0,0); baseDate = d; break; }
+  }
+  if (!baseDate) { const t = new Date(); t.setHours(0,0,0,0); baseDate = t; }
+  baseDates[acc] = baseDate;
+  if (acc === currentAcc) updateBaseDateDisplay();
   return rows.map(r => {
     const ccy = (r['통화키_지급']||r['통화키지급']||r['통화']||'').toString().trim().toUpperCase();
     const raw = r['만기수취금액']||r['만기 수취금액']||r['만기금액']||r['수취금액']||0;
