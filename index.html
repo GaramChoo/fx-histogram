@@ -122,6 +122,29 @@ tr:hover td { background: #EBF3FB; }
 .empty-state { text-align: center; padding: 80px 20px; color: #ccc; }
 .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
 .empty-state p { font-size: 0.88rem; }
+
+/* ── Counterparty Section ── */
+.cp-section {
+  background: white; border-radius: 12px; padding: 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.07); margin-bottom: 20px;
+}
+.cp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.cp-title { font-size: 0.92rem; font-weight: 700; color: #1F4E79; }
+.cp-subtitle { font-size: 0.75rem; color: #aaa; margin-top: 3px; }
+.cp-body { display: grid; grid-template-columns: 1fr 340px; gap: 28px; align-items: start; }
+@media(max-width: 860px) { .cp-body { grid-template-columns: 1fr; } }
+.cp-donut-wrap { position: relative; height: 300px; }
+.cp-table-wrap { overflow-x: auto; }
+.cp-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.cp-table th { background: #1F4E79; color: white; padding: 8px 12px; text-align: center; font-weight: 600; white-space: nowrap; }
+.cp-table th:first-child { text-align: left; }
+.cp-table td { padding: 7px 12px; border-bottom: 1px solid #f0f4f8; text-align: right; white-space: nowrap; }
+.cp-table td:first-child { text-align: left; color: #333; }
+.cp-table td.rank { text-align: center; color: #aaa; font-size: 0.78rem; }
+.cp-table tr:nth-child(even) td { background: #fafcfe; }
+.cp-table tr:hover td { background: #EBF3FB; }
+.cp-table .total-row td { background: #EBF3FB !important; font-weight: 700; border-top: 2px solid #BDD7EE; color: #1F4E79; }
+.color-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -247,6 +270,22 @@ tr:hover td { background: #EBF3FB; }
     </div>
   </div>
 
+  <!-- Counterparty Section -->
+  <div class="cp-section">
+    <div class="cp-header">
+      <div>
+        <div class="cp-title">🏦 거래상대방별 만기금액</div>
+        <div class="cp-subtitle" id="cp-subtitle">파일을 업로드하면 표시됩니다</div>
+      </div>
+    </div>
+    <div class="cp-body" id="cp-body">
+      <div style="grid-column:1/-1" class="empty-state">
+        <div class="icon">🏦</div>
+        <p>파일에 '거래상대방명' 컬럼이 있으면 자동으로 표시됩니다.</p>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -258,11 +297,13 @@ const CCY_COLORS = {
 
 // State
 let store = { '일반': null, '특별': null };   // parsed data per account
+let cpStore = { '일반': null, '특별': null };  // counterparty data per account
 let currentAcc = '일반';
 let xMode = 'month';
 let selectedCcys = new Set(['ALL']);
 let allCcys = [];
 let mainChart = null;
+let cpChart = null;
 
 // ── Base Date (per account, from file) ────────────────────────────────────────
 let baseDates = { '일반': null, '특별': null };
@@ -342,6 +383,7 @@ function handleFile(file, acc) {
 
 function clearFile(acc) {
   store[acc] = null;
+  cpStore[acc] = null;
   document.getElementById('badge-'+acc).innerHTML = '';
   document.getElementById('file-'+acc).value = '';
   document.getElementById('upload-'+acc).classList.remove('loaded');
@@ -365,6 +407,19 @@ function parseRows(rows, acc) {
   if (!baseDate) { const t = new Date(); t.setHours(0,0,0,0); baseDate = t; }
   baseDates[acc] = baseDate;
   if (acc === currentAcc) updateBaseDateDisplay();
+
+  // Parse counterparty data (independent of base date filter)
+  const cpMap = {};
+  rows.forEach(r => {
+    const cp = (r['거래상대방명'] || r['거래상대방'] || '').toString().trim();
+    const raw = r['만기수취금액']||r['만기 수취금액']||r['만기금액']||r['수취금액']||0;
+    const amount = parseFloat(String(raw).replace(/,/g,'')) || 0;
+    if (!cp || !amount) return;
+    cpMap[cp] = (cpMap[cp] || 0) + amount;
+  });
+  cpStore[acc] = Object.keys(cpMap).length > 0
+    ? Object.entries(cpMap).sort((a,b) => b[1]-a[1]).map(([name, amount]) => ({ name, amount }))
+    : null;
   return rows.map(r => {
     const ccy = (r['통화키_지급']||r['통화키지급']||r['통화']||'').toString().trim().toUpperCase();
     const raw = r['만기수취금액']||r['만기 수취금액']||r['만기금액']||r['수취금액']||0;
@@ -473,6 +528,7 @@ function render() {
   updateCards(data, filtered);
   buildChart(filtered);
   buildTable(filtered);
+  buildCounterparty();
 
   const modeLabel = {month:'월별',quarter:'분기별',halfyear:'반기별',year:'연별'}[xMode];
   const ccyLabel = selectedCcys.has('ALL') ? '전체 통화' : [...selectedCcys].join(', ');
@@ -583,6 +639,100 @@ function fmt(n) {
   if (n>=1e12) return (n/1e12).toFixed(1)+'조';
   if (n>=1e8)  return Math.round(n/1e8).toLocaleString()+'억';
   return n.toLocaleString();
+}
+
+// ── Counterparty ───────────────────────────────────────────────────────────────
+// Palette: 12 distinct colors for counterparties
+const CP_PALETTE = [
+  '#2E75B6','#ED7D31','#70AD47','#E84040','#7030A0',
+  '#00B0F0','#F4B942','#1F4E79','#C55A11','#375623',
+  '#833C00','#5B2B8C'
+];
+
+function buildCounterparty() {
+  const cpData = cpStore[currentAcc];
+  const bodyEl = document.getElementById('cp-body');
+  const subtitleEl = document.getElementById('cp-subtitle');
+
+  if (!cpData || !cpData.length) {
+    bodyEl.innerHTML = `<div style="grid-column:1/-1" class="empty-state">
+      <div class="icon">🏦</div>
+      <p>파일에 '거래상대방명' 컬럼이 있으면 자동으로 표시됩니다.</p>
+    </div>`;
+    subtitleEl.textContent = '파일을 업로드하면 표시됩니다';
+    if (cpChart) { cpChart.destroy(); cpChart = null; }
+    return;
+  }
+
+  const grand = cpData.reduce((s,d) => s+d.amount, 0);
+  subtitleEl.textContent = `${currentAcc}계정 · 총 ${cpData.length}개 거래상대방 · ${fmt(grand)} KRW`;
+
+  // Colors assigned by rank
+  const colors = cpData.map((_, i) => CP_PALETTE[i % CP_PALETTE.length]);
+
+  // Build table HTML
+  let tableHtml = `<div class="cp-table-wrap"><table class="cp-table">
+    <thead><tr>
+      <th>순위</th><th>거래상대방</th>
+      <th>만기금액(억)</th><th>비중</th>
+    </tr></thead><tbody>`;
+
+  cpData.forEach((d, i) => {
+    const pct = (d.amount / grand * 100).toFixed(1);
+    const color = colors[i];
+    tableHtml += `<tr>
+      <td class="rank">${i+1}</td>
+      <td><span class="color-dot" style="background:${color}"></span>${d.name}</td>
+      <td>${Math.round(d.amount/1e8).toLocaleString()}</td>
+      <td>${pct}%</td>
+    </tr>`;
+  });
+
+  tableHtml += `<tr class="total-row">
+    <td class="rank">—</td>
+    <td>합 계</td>
+    <td>${Math.round(grand/1e8).toLocaleString()}</td>
+    <td>100%</td>
+  </tr></tbody></table></div>`;
+
+  // Donut chart canvas
+  const donutHtml = `<div class="cp-donut-wrap"><canvas id="cp-chart"></canvas></div>`;
+
+  bodyEl.innerHTML = donutHtml + tableHtml;
+
+  if (cpChart) cpChart.destroy();
+  cpChart = new Chart(document.getElementById('cp-chart'), {
+    type: 'doughnut',
+    data: {
+      labels: cpData.map(d => d.name),
+      datasets: [{
+        data: cpData.map(d => Math.round(d.amount/1e8)),
+        backgroundColor: colors,
+        borderWidth: 2,
+        borderColor: '#fff',
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      cutout: '58%',
+      plugins: {
+        legend: {
+          display: cpData.length <= 8,
+          position: 'bottom',
+          labels: { font:{size:10}, padding:10, usePointStyle:true, pointStyleWidth:8 }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const pct = (ctx.parsed / (grand/1e8) * 100).toFixed(1);
+              return ` ${ctx.parsed.toLocaleString()} 억원 (${pct}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
 }
 </script>
 </body>
