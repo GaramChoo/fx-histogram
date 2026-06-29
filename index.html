@@ -260,16 +260,6 @@ tr:hover td { background: #EBF3FB; }
     </div>
   </div>
 
-  <!-- Table -->
-  <div class="table-box">
-    <h3>📋 기간별 만기금액 상세 <span style="font-weight:400;color:#aaa;font-size:0.8rem">(단위: 억 KRW)</span></h3>
-    <div class="table-scroll" id="detail-table">
-      <div class="empty-state" style="padding:40px">
-        <p style="color:#ccc;font-size:0.88rem">파일을 업로드하면 테이블이 표시됩니다.</p>
-      </div>
-    </div>
-  </div>
-
   <!-- Counterparty Section -->
   <div class="cp-section">
     <div class="cp-header">
@@ -277,11 +267,26 @@ tr:hover td { background: #EBF3FB; }
         <div class="cp-title">🏦 거래상대방별 만기금액</div>
         <div class="cp-subtitle" id="cp-subtitle">파일을 업로드하면 표시됩니다</div>
       </div>
+      <div class="seg-ctrl" id="cp-view-tabs">
+        <button class="seg-btn active" data-cp="일반" onclick="setCpView(this)">일반계정</button>
+        <button class="seg-btn"        data-cp="특별" onclick="setCpView(this)">특별계정</button>
+        <button class="seg-btn"        data-cp="합산" onclick="setCpView(this)">합산</button>
+      </div>
     </div>
     <div class="cp-body" id="cp-body">
       <div style="grid-column:1/-1" class="empty-state">
         <div class="icon">🏦</div>
         <p>파일에 '거래상대방명' 컬럼이 있으면 자동으로 표시됩니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-box">
+    <h3>📋 기간별 만기금액 상세 <span style="font-weight:400;color:#aaa;font-size:0.8rem">(단위: 억 KRW)</span></h3>
+    <div class="table-scroll" id="detail-table">
+      <div class="empty-state" style="padding:40px">
+        <p style="color:#ccc;font-size:0.88rem">파일을 업로드하면 테이블이 표시됩니다.</p>
       </div>
     </div>
   </div>
@@ -304,6 +309,7 @@ let selectedCcys = new Set(['ALL']);
 let allCcys = [];
 let mainChart = null;
 let cpChart = null;
+let cpView = '일반'; // '일반' | '특별' | '합산'
 
 // ── Base Date (per account, from file) ────────────────────────────────────────
 let baseDates = { '일반': null, '특별': null };
@@ -333,13 +339,24 @@ function switchAccount(el) {
   document.querySelectorAll('.acc-tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
   currentAcc = el.dataset.acc;
-  // Show/hide upload panels
   document.getElementById('upload-일반').style.display = currentAcc === '일반' ? '' : 'none';
   document.getElementById('upload-특별').style.display = currentAcc === '특별' ? '' : 'none';
   selectedCcys = new Set(['ALL']);
+  // Sync cp tab to current account
+  cpView = currentAcc;
+  document.querySelectorAll('#cp-view-tabs .seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.cp === cpView);
+  });
   updateBaseDateDisplay();
   rebuildCcyPills();
   render();
+}
+
+function setCpView(el) {
+  document.querySelectorAll('#cp-view-tabs .seg-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  cpView = el.dataset.cp;
+  buildCounterparty();
 }
 
 // ── File Handling ──────────────────────────────────────────────────────────────
@@ -374,8 +391,16 @@ function handleFile(file, acc) {
 
     if (acc === currentAcc) {
       selectedCcys = new Set(['ALL']);
+      // Sync cp tab to match current account after upload
+      cpView = currentAcc;
+      document.querySelectorAll('#cp-view-tabs .seg-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.cp === cpView);
+      });
       rebuildCcyPills();
       render();
+    } else {
+      // Other account uploaded — rebuild cp in case '합산' is selected
+      if (cpView === '합산') buildCounterparty();
     }
   };
   reader.readAsArrayBuffer(file);
@@ -642,15 +667,29 @@ function fmt(n) {
 }
 
 // ── Counterparty ───────────────────────────────────────────────────────────────
-// Palette: 12 distinct colors for counterparties
 const CP_PALETTE = [
   '#2E75B6','#ED7D31','#70AD47','#E84040','#7030A0',
   '#00B0F0','#F4B942','#1F4E79','#C55A11','#375623',
   '#833C00','#5B2B8C'
 ];
 
+function getCpData(view) {
+  if (view === '합산') {
+    // Merge both accounts
+    const map = {};
+    ['일반','특별'].forEach(acc => {
+      (cpStore[acc] || []).forEach(d => {
+        map[d.name] = (map[d.name] || 0) + d.amount;
+      });
+    });
+    const merged = Object.entries(map).sort((a,b) => b[1]-a[1]).map(([name,amount]) => ({name,amount}));
+    return merged.length ? merged : null;
+  }
+  return cpStore[view] || null;
+}
+
 function buildCounterparty() {
-  const cpData = cpStore[currentAcc];
+  const cpData = getCpData(cpView);
   const bodyEl = document.getElementById('cp-body');
   const subtitleEl = document.getElementById('cp-subtitle');
 
@@ -664,8 +703,9 @@ function buildCounterparty() {
     return;
   }
 
+  const viewLabel = cpView === '합산' ? '일반+특별 합산' : cpView + '계정';
   const grand = cpData.reduce((s,d) => s+d.amount, 0);
-  subtitleEl.textContent = `${currentAcc}계정 · 총 ${cpData.length}개 거래상대방 · ${fmt(grand)} KRW`;
+  subtitleEl.textContent = `${viewLabel} · 총 ${cpData.length}개 거래상대방 · ${fmt(grand)} KRW`;
 
   // Colors assigned by rank
   const colors = cpData.map((_, i) => CP_PALETTE[i % CP_PALETTE.length]);
